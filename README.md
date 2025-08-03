@@ -1,42 +1,10 @@
-# YAIL (Yet Another Image Loader)
+# YAIL (Yet Another Image Loader) Image Server
 
 ## About ##
-Atari 8bit image loader supporting binary PBM and its own YAI format.
-
-If you have a FujiNet you can view streamed images from the search terms you enter.
-
-Using custom display lists YAIL is able to display 220 lines instead of the default 192. This means that when loading a PBM (black and white) image the display will be in Graphics 8 (ANTIC F) at a 320x220 resolution.
-
-## Console ##
-YAIL has a simple text console for interaction that is activated when you start to type.
-Commands:
-
-  - help                  - List of commands
-  - load <filename>       - Loads the specified PBM/PGM files and now a new YAI file.
-  - save <filename>       - Saves the current image and graphics state to a YAI file.
-  - cls                   - Clears the screen
-  - gfx #  (0, 8, 9, 20)  - (For Atari) Change the graphics mode to the number specified
-  - search <terms>        - Stream images found on the internet using DDG from the yail.py.
-  - generate <terms>      - Stream images generated using AI from the yail.py.
-  - set server <url>      - Give the N:TCP URL for the location of the yailsrv.py.
-                             Ex: set server N:TCP://192.168.1.205:9999/
-  - quit              - Quit the application
-
-Tested on and works with the Atari 800XL.  Other models, **YMMV**
+This is the image server software that streams images to the YAIL client.  The server performs the "heavy lifting" of finding the image then converting it to the requested format and finally streams it via TCP to the client.
 
 ## Command line ##
-Usage: YAIL.XEX [OPTIONS]
-
-  -h this message
-  
-  -l <filename> load image file
-  
-  -u <url> use this server address
-  
-  -s <tokens> search terms
-
-## Server ##
-The server is written in Python and provides various image streaming capabilities for the YAIL client on Atari 8-bit computers via FujiNet.
+** TBD ***
 
 ### Features ###
 - **Multi-API Image Generation**: Generate images using OpenAI's DALL-E 3 model or Google's Gemini model
