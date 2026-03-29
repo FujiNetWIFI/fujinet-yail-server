@@ -12,7 +12,6 @@ import socket
 import threading
 from threading import Thread, Lock
 import random
-from duckduckgo_search import DDGS
 from fastcore.all import *
 from pprint import pformat
 from PIL import Image
@@ -365,16 +364,15 @@ def search_images(term: str, max_images: int=1000) -> List[str]:
         List[str]: List of image URLs
     """
     try:
-        from duckduckgo_search import DDGS
-        ddgs = DDGS()
-        results = ddgs.images(term, max_results=max_images)
+        from ddgs import DDGS
+        results = DDGS().images(query=term, max_results=max_images)
         
         # Extract image URLs from results
         urls = [result['image'] for result in results]
         logger.info(f"Found {len(urls)} images for search term: '{term}'")
         return urls
     except Exception as e:
-        logger.error(f"Error searching for images: {e}")
+        logger.error(f"Error searching for images '{term}': {e}")
         return []
 
 def stream_random_image_from_urls(client_socket: socket.socket, urls: list, gfx_mode: int) -> None:

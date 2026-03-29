@@ -1,6 +1,5 @@
 requests>=1.0.0
-#duckduckgo_search>=1.0.0
-duckduckgo-search>=1.0.0
+ddgs>=9.0.0
 fastcore>=1.0.0
 pillow>=9.0.0
 tqdm>=1.0.0
