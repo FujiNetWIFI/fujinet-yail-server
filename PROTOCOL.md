@@ -24,7 +24,8 @@ Anything that looks like an HTTP request (`GET`, `POST`, `PUT`, `DELETE`,
 | --- | --- |
 | `gfx <mode>` | Select graphics mode for subsequent images (see mode values). |
 | `search "<terms>"` | Image search (DDGS); a random result is converted and streamed. |
-| `gen <model> "<prompt>"` | Generate an image with the named model and stream it. |
+| `gen "<prompt>"` | Generate an image with the server's configured model and stream it. |
+| `gen <model> "<prompt>"` | Legacy form: generate with the named model (retired model names are served with the current default). |
 | `gen-gemini "<prompt>"` | Generate with the default Gemini image model. |
 | `showurl <url>` | Fetch a specific image URL and stream it. |
 | `files` | Stream a random image from the server's `--paths` collection. |

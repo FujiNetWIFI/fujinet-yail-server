@@ -1,14 +1,22 @@
+# Template unit for the FujiNet YAIL Server.
+#
+# systemd does NOT expand shell-style variables in WorkingDirectory= or in
+# the ExecStart= executable path, so this file carries placeholder tokens
+# that deployment/deploy.sh replaces with absolute paths before installing
+# the rendered unit to /etc/systemd/system/.
+#
+#   @YAIL_USER@  -> user the service runs as
+#   @YAIL_ROOT@  -> absolute install directory
+
 [Unit]
 Description=FujiNet YAIL Server
 After=network.target
 
 [Service]
-# Root of the installed yail-server package and its virtual environment
-Environment="YAIL_ROOT=/opt/fujinet-yail-server"
 Type=simple
-User=fujinet
-WorkingDirectory=${YAIL_ROOT}
-ExecStart=${YAIL_ROOT}/venv/bin/yail-server --env-file ${YAIL_ROOT}/.env
+User=@YAIL_USER@
+WorkingDirectory=@YAIL_ROOT@
+ExecStart=@YAIL_ROOT@/venv/bin/yail-server --env-file @YAIL_ROOT@/.env
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

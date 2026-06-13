@@ -21,11 +21,13 @@ def gen_config(monkeypatch):
     return ImageGenConfig()
 
 
-def run_session(commands: bytes, gen_config, filenames=None, timeout=10.0) -> bytes:
+def run_session(commands: bytes, gen_config, filenames=None, timeout=10.0,
+                files_enabled=True, streaming_enabled=True) -> bytes:
     """Run a ClientSession against a socketpair; return everything it sent."""
     server_sock, client_sock = socket.socketpair()
-    session = ClientSession(server_sock, 1, ServerConfig(), gen_config,
-                            filenames or [])
+    config = ServerConfig(files_enabled=files_enabled,
+                          streaming_enabled=streaming_enabled)
+    session = ClientSession(server_sock, 1, config, gen_config, filenames or [])
 
     def run():
         try:
@@ -91,6 +93,29 @@ def test_files_with_no_files_sends_error_packet(gen_config):
     assert received[10:10 + msg_len] == b"No image files available"
 
 
+def test_files_disabled_sends_error_packet(gen_config):
+    # Even with files indexed, the 'files' command requires explicit opt-in.
+    received = run_session(b"files quit", gen_config, filenames=[TEST_IMAGE],
+                           files_enabled=False)
+    assert received[:3] == bytes([1, 4, 0])
+    assert received[5] == ERROR_BLOCK
+    msg_len = struct.unpack("<I", received[6:10])[0]
+    assert received[10:10 + msg_len] == b"File serving is disabled on this server"
+
+
+def test_next_with_streaming_disabled_sends_error(gen_config):
+    received = run_session(b"gfx 4 files next quit", gen_config,
+                           filenames=[TEST_IMAGE], streaming_enabled=False)
+    # The files image streams normally; the 'next' is refused.
+    assert received[:3] == bytes([1, 1, 0])
+    error_start = 7 + 8800
+    packet = received[error_start:]
+    assert packet[:3] == bytes([1, 4, 0])
+    assert packet[5] == ERROR_BLOCK
+    msg_len = struct.unpack("<I", packet[6:10])[0]
+    assert packet[10:10 + msg_len] == b"Streaming is disabled on this server"
+
+
 def test_next_without_mode_sends_error(gen_config):
     received = run_session(b"next quit", gen_config)
     assert received[5] == ERROR_BLOCK
@@ -102,7 +127,7 @@ def test_gen_routes_model_and_prompt(gen_config, monkeypatch):
     def fake_generate(prompt, cfg, model=None):
         seen["prompt"] = prompt
         seen["model"] = model
-        return TEST_IMAGE
+        return TEST_IMAGE, None
 
     monkeypatch.setattr("yail.server.generate_image", fake_generate)
     received = run_session(b'gen gpt-image-1 "a red rocket" quit', gen_config)
@@ -113,8 +138,42 @@ def test_gen_routes_model_and_prompt(gen_config, monkeypatch):
     assert received[:3] == bytes([1, 1, 0])  # image streamed
 
 
+def test_gen_without_model_uses_server_default(gen_config, monkeypatch):
+    seen = {}
+
+    def fake_generate(prompt, cfg, model=None):
+        seen["prompt"] = prompt
+        seen["model"] = model
+        return TEST_IMAGE, None
+
+    monkeypatch.setattr("yail.server.generate_image", fake_generate)
+    received = run_session(b'gen "a red rocket" quit', gen_config)
+
+    # No model token: the server's configured model decides.
+    assert seen["model"] is None
+    assert seen["prompt"] == "a red rocket"
+    assert received[:3] == bytes([1, 1, 0])
+
+
+def test_gen_bare_word_treated_as_prompt(gen_config, monkeypatch):
+    seen = {}
+
+    def fake_generate(prompt, cfg, model=None):
+        seen["prompt"] = prompt
+        seen["model"] = model
+        return TEST_IMAGE, None
+
+    monkeypatch.setattr("yail.server.generate_image", fake_generate)
+    # Unquoted prompts consume the rest of the buffer (legacy tokenizer),
+    # so no trailing 'quit' here; the session ends with the socket.
+    run_session(b"gen sailboat", gen_config)
+    assert seen["model"] is None
+    assert seen["prompt"] == "sailboat"
+
+
 def test_search_uses_ddgs_results(gen_config, monkeypatch):
-    monkeypatch.setattr("yail.server.search_images", lambda term, max_images=1000: [])
+    monkeypatch.setattr("yail.server.search_images",
+                        lambda term, max_images=1000, backends=None: [])
     received = run_session(b'search "anything" quit', gen_config)
     assert received[5] == ERROR_BLOCK  # no images found -> error packet
 

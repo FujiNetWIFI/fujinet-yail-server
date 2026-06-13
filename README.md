@@ -12,8 +12,8 @@ The wire protocol is documented in [PROTOCOL.md](PROTOCOL.md).
 ## Features
 
 - **Image search**: `search` finds images via the DDGS metasearch package
-- **AI image generation**: OpenAI (`gpt-image-1`, `dall-e-3`, `dall-e-2`) and
-  Google Gemini (`gemini-2.5-flash-image` and other image-capable models)
+- **AI image generation**: any image-output model on OpenRouter
+  (Gemini image models, gpt-image-1, FLUX, Recraft, ...) with one API key
 - **Local image streaming**: serve a directory of images with `--paths`
 - **Direct URLs**: `showurl` streams a specific image URL
 - **Webcam streaming**: optional, via pygame (`[camera]` extra)
@@ -40,11 +40,8 @@ yail-server --paths /path/to/images --loglevel INFO
 # Choose a port (default 5556)
 yail-server --paths test_images --port 5556
 
-# Image generation with OpenAI
-yail-server --openai-api-key sk-... --gen-model gpt-image-1
-
-# Image generation with Google Gemini (requires GEMINI_API_KEY)
-yail-server --gen-model gemini
+# Image generation via OpenRouter (one key, any model)
+yail-server --openrouter-api-key sk-or-... --gen-model google/gemini-2.5-flash-image
 ```
 
 `python -m yail` works as an alternative to the `yail-server` script.
@@ -73,22 +70,63 @@ Copy `deployment/env.example` to `.env` in the working directory (or pass
 `--env-file path`):
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key_here
-GEMINI_API_KEY=your_gemini_api_key_here_if_needed
-GEN_MODEL=dall-e-3        # gpt-image-1, dall-e-3, dall-e-2, gemini, ...
-OPENAI_SIZE=1024x1024
-OPENAI_QUALITY=standard   # dall-e-3: standard|hd; gpt-image-1: low|medium|high|auto
-OPENAI_STYLE=vivid        # dall-e-3 only: vivid|natural
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+GEN_MODEL=google/gemini-2.5-flash-image   # any OpenRouter image-output model
 ```
 
-### API keys
+### API key
 
-- OpenAI models (`gpt-image-1`, `dall-e-*`): [OpenAI API keys](https://platform.openai.com/api-keys)
-- Gemini models: [Google AI Studio](https://aistudio.google.com/)
+All generation goes through [OpenRouter](https://openrouter.ai/keys) — one
+key covers every image model. Model names use the OpenRouter `vendor/model`
+form; legacy bare names from deployed clients (`gpt-image-1`, `gemini`,
+`dall-e-*`) are resolved to OpenRouter equivalents automatically.
 
-Model routing is automatic: names starting with `dall-e-` or `gpt-` use the
-OpenAI API; names containing `gemini` use the Google Gemini API (`gemini`
-alone selects `gemini-2.5-flash-image`).
+## Admin web UI
+
+The server runs a lightweight admin dashboard alongside the YAIL protocol
+socket (no extra dependencies). It shows server status, connected clients,
+recently served images with conversion timing, and a live log tail, and
+lets you view/update generation settings and API keys at runtime —
+optionally persisting them to the env file.
+
+```bash
+yail-server --paths images          # UI at http://127.0.0.1:5557/
+yail-server --ui-port 8080          # different UI port
+yail-server --no-ui                 # disable the UI
+```
+
+By default the UI binds to `127.0.0.1` only, since it can read masked and
+set unmasked API keys. To reach a remote server's UI, prefer an SSH tunnel
+(`ssh -L 5557:127.0.0.1:5557 host`) over exposing it with `--ui-host`.
+
+JSON endpoints behind the dashboard: `/api/status`, `/api/config`
+(GET/POST), `/api/logs`, `/api/stats`.
+
+### Local file serving
+
+The `files` command is **disabled by default**: the server never serves
+local images unless explicitly configured. Enable it one of three ways:
+
+- pass `--paths /folder` on the command line (explicit opt-in), or
+- set `FILES_PATH=/absolute/folder` and `FILES_ENABLED=true` in the env
+  file, or
+- set the folder path and tick "enable local file serving" in the web UI
+  (persisting writes the two env vars above, and the new folder is
+  re-indexed live without a restart).
+
+### Streaming and search servers
+
+The web UI also manages (all persisted to the env file, applied live):
+
+- **Streaming** — enable/disable the client slideshow (`next` command),
+  plus max retries per request, wait between retries, and the remote
+  image download timeout (`STREAM_ENABLED`, `STREAM_MAX_RETRIES`,
+  `STREAM_RETRY_WAIT`, `STREAM_DOWNLOAD_TIMEOUT`).
+- **Image search servers** — an ordered, editable list of DDGS engines
+  used by the `search` command (add/remove in the UI; `auto` means all
+  engines), plus the max result count (`SEARCH_BACKENDS`,
+  `SEARCH_MAX_RESULTS`). Useful when one engine starts returning no
+  results — switch to another without touching the code.
 
 ## Deployment
 

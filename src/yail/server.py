@@ -21,13 +21,12 @@ from yail.gen import generate_image
 from yail.imaging import convert_image_to_yail
 from yail.protocol import GRAPHICS_8, build_error_packet
 from yail.search import search_images
+from yail.stats import STATS
 
 logger = logging.getLogger(__name__)
 
-SOCKET_WAIT_TIME = 1      # seconds between retries on a bad image
-MAX_STREAM_RETRIES = 10   # attempts before giving up on a source list
 CLIENT_TIMEOUT = 300      # seconds
-DOWNLOAD_TIMEOUT = 5      # seconds
+DOWNLOAD_TIMEOUT = 5      # seconds (default; ServerConfig.download_timeout overrides)
 IMAGE_URL_EXTS = [".jpg", ".jpeg", ".gif", ".png"]
 HTTP_METHODS = (b"GET", b"POST", b"PUT", b"DELETE", b"HEAD")
 HTTP_FORBIDDEN = (b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n"
@@ -55,11 +54,12 @@ def take_phrase(tokens: list[str]) -> tuple[str, list[str]]:
     return strip_quotes(" ".join(tokens)), []
 
 
-def fetch_image(url: str | None = None, filepath: str | None = None) -> Image.Image:
+def fetch_image(url: str | None = None, filepath: str | None = None,
+                timeout: float = DOWNLOAD_TIMEOUT) -> Image.Image:
     """Load a PIL image from a URL or a local path."""
     if url is not None:
         logger.info(f"Loading {url}")
-        response = requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT)
+        response = requests.get(url, stream=True, timeout=timeout)
         image_data = b""
         for chunk in response.iter_content(4096):
             image_data += chunk
@@ -102,45 +102,58 @@ class ClientSession:
 
     def stream_image(self, url: str | None = None, filepath: str | None = None) -> bool:
         """Convert one image source to YAI bytes and send it. True on success."""
+        start = time.monotonic()
+        target = url or filepath or "?"
         try:
-            image = fetch_image(url=url, filepath=filepath)
+            image = fetch_image(url=url, filepath=filepath,
+                                timeout=self.server_config.download_timeout)
             self.socket.sendall(convert_image_to_yail(image, self.gfx_mode))
+            STATS.image_event(self.thread_id, self.client_mode or "?", target,
+                              self.gfx_mode, True, time.monotonic() - start)
             return True
         except (BrokenPipeError, ConnectionResetError):
             raise
         except Exception as e:
             logger.error(f"{self.thread_id} Failed to stream {url or filepath}: {e}")
+            STATS.image_event(self.thread_id, self.client_mode or "?", target,
+                              self.gfx_mode, False, time.monotonic() - start)
             return False
 
     def stream_random_from_urls(self) -> None:
         if not self.urls:
             self.send_text("No images found", is_error=True)
             return
-        for _ in range(MAX_STREAM_RETRIES):
+        for _ in range(self.server_config.stream_max_retries):
             url = random.choice(self.urls)
             if self.stream_image(url=url):
                 return
             logger.warning(f"{self.thread_id} Problem with {url}, trying another...")
-            time.sleep(SOCKET_WAIT_TIME)
+            time.sleep(self.server_config.stream_retry_wait)
         self.send_text("Could not load any image", is_error=True)
 
     def stream_random_from_files(self) -> None:
+        if not self.server_config.files_enabled:
+            self.send_text("File serving is disabled on this server", is_error=True)
+            return
         if not self.filenames:
             self.send_text("No image files available", is_error=True)
             return
-        for _ in range(MAX_STREAM_RETRIES):
+        for _ in range(self.server_config.stream_max_retries):
             filename = random.choice(self.filenames)
             if self.stream_image(filepath=filename):
                 return
             logger.warning(f"{self.thread_id} Problem with {filename}, trying another...")
-            time.sleep(SOCKET_WAIT_TIME)
+            time.sleep(self.server_config.stream_retry_wait)
         self.send_text("Could not load any image", is_error=True)
 
     def stream_generated(self, prompt: str, model: str | None = None) -> None:
         logger.info(f"{self.thread_id} Generating image with prompt: '{prompt}'")
-        url_or_path = generate_image(prompt, self.gen_config, model=model)
+        STATS.incr("generations")
+        url_or_path, error = generate_image(prompt, self.gen_config, model=model)
         if not url_or_path:
-            self.send_text("Failed to generate image", is_error=True)
+            STATS.incr("generation_failures")
+            self.send_text(f"Generation failed: {error or 'unknown error'}",
+                           is_error=True)
             return
         if url_or_path.startswith("http"):
             ok = self.stream_image(url=url_or_path)
@@ -174,19 +187,29 @@ class ClientSession:
         self.client_mode = "search"
         prompt, rest = take_phrase(tokens[1:])
         logger.info(f"{self.thread_id} Received search '{prompt}'")
-        self.urls = search_images(prompt)
+        STATS.incr("searches")
+        self.urls = search_images(prompt,
+                                  max_images=self.server_config.search_max_results,
+                                  backends=self.server_config.search_backends)
         self.stream_random_from_urls()
         return rest
 
     def handle_generate(self, tokens: list[str]) -> list[str]:
-        # Client format: gen <model> "<prompt>"
+        # Current clients send 'gen "<prompt>"' and the server picks the
+        # model; legacy clients send 'gen <model> "<prompt>"'.
         self.client_mode = "generate"
-        if len(tokens) < 3:
-            self.send_text("Usage: gen <model> <prompt>", is_error=True)
+        if len(tokens) < 2:
+            self.send_text("Usage: gen [model] <prompt>", is_error=True)
             return []
-        model = tokens[1]
-        prompt, rest = take_phrase(tokens[2:])
-        logger.info(f"{self.thread_id} Received {tokens[0]} model={model} prompt='{prompt}'")
+        model: str | None = None
+        if tokens[1].startswith('"') or not self.gen_config.is_valid_model(tokens[1]):
+            # No model token (or a bare prompt word): server picks the model.
+            prompt, rest = take_phrase(tokens[1:])
+        else:
+            model = tokens[1]
+            prompt, rest = take_phrase(tokens[2:])
+        logger.info(f"{self.thread_id} Received {tokens[0]} "
+                    f"model={model or '(server default)'} prompt='{prompt}'")
         self.last_prompt = prompt
         self.last_model = model
         self.stream_generated(prompt, model=model)
@@ -217,6 +240,9 @@ class ClientSession:
         return tokens[1:]
 
     def handle_next(self, tokens: list[str]) -> list[str]:
+        if not self.server_config.streaming_enabled:
+            self.send_text("Streaming is disabled on this server", is_error=True)
+            return tokens[1:]
         if self.client_mode == "search":
             self.stream_random_from_urls()
         elif self.client_mode == "video":
@@ -310,6 +336,8 @@ class ClientSession:
                     logger.warning(f"{self.thread_id} Undecodable request, ignoring")
                     continue
                 tokens = r_string.rstrip(" \r\n").split(" ")
+                STATS.session_update(self.thread_id,
+                                     last_command=r_string.rstrip(" \r\n")[:120])
 
             logger.debug(f"{self.thread_id} Tokens {tokens}")
             command = tokens[0]
@@ -339,6 +367,9 @@ class ClientSession:
                 logger.info(f"{self.thread_id} Unrecognized command: {command!r}")
                 self.send_text("ACK!")
 
+            STATS.session_update(self.thread_id, mode=self.client_mode,
+                                 gfx_mode=self.gfx_mode)
+
 
 class YailServer:
     """Accept loop dispatching one ClientSession per connection."""
@@ -354,11 +385,13 @@ class YailServer:
         self._lock = threading.Lock()
         self._next_id = 0
 
-    def _handle_client(self, client_socket: socket.socket, thread_id: int) -> None:
+    def _handle_client(self, client_socket: socket.socket, thread_id: int,
+                       address: str = "?") -> None:
         with self._lock:
             self._connections += 1
             logger.info(f"Starting connection {thread_id} "
                         f"(active: {self._connections})")
+        STATS.session_started(thread_id, address)
 
         session = ClientSession(client_socket, thread_id, self.server_config,
                                 self.gen_config, self.filenames)
@@ -379,6 +412,7 @@ class YailServer:
                 client_socket.close()
             except OSError:
                 pass
+            STATS.session_ended(thread_id)
             with self._lock:
                 self._connections -= 1
                 logger.info(f"Closed connection {thread_id} (active: {self._connections})")
@@ -410,7 +444,7 @@ class YailServer:
             self._next_id += 1
             thread = threading.Thread(
                 target=self._handle_client,
-                args=(client_sock, self._next_id),
+                args=(client_sock, self._next_id, f"{address[0]}:{address[1]}"),
                 daemon=True,
             )
             thread.start()
